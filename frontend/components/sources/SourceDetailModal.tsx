@@ -5,6 +5,7 @@ import { useEffect, useMemo } from "react";
 
 import { claimSegments, locateSegmentInSources } from "@/lib/highlight";
 import type { HalloumiResponse, SourceDoc } from "@/lib/types";
+import { sourceDomain, sourceTypeLabel } from "@/lib/sourceDisplay";
 import { claimVerdict, VERDICT_STYLES } from "@/lib/verdicts";
 
 import { Badge } from "@/components/ui/badge";
@@ -66,8 +67,8 @@ export function SourceDetailModal({
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold">{source.title}</h2>
             <p className="mt-0.5 text-xs text-ink-muted">
-              {source.sourceType} · {source.text.length.toLocaleString()} characters
-              {source.url && ` · ${source.url}`}
+              {sourceTypeLabel(source)} · {source.text.length.toLocaleString()} characters
+              {sourceDomain(source.url) && ` · ${sourceDomain(source.url)}`}
             </p>
           </div>
           <Button variant="ghost" size="sm" aria-label="Close" onClick={onClose}>

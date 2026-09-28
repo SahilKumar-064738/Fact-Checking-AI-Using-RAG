@@ -51,3 +51,6 @@ mock_datasets/all_*.jsonl
 # Artifacts (debug data, HAR files, POCs, discovery notes)
 artifacts/
 test2.*
+
+# Visual QA screenshots (ephemeral)
+qa_shots/

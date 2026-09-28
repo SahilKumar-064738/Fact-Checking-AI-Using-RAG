@@ -16,8 +16,8 @@ beforeEach(() => {
 afterEach(cleanup);
 
 async function typeAndAddSource(text: string, title = "My Source") {
-  // Open the dialog from the sources panel (first "Add source" button)
-  fireEvent.click(screen.getAllByRole("button", { name: /add source/i })[0]);
+  // Open the dialog from the sources panel header — the single CTA
+  fireEvent.click(screen.getByRole("button", { name: /add source/i }));
   const dialog = await screen.findByRole("dialog", { name: /add source/i });
   fireEvent.change(within(dialog).getByLabelText(/title/i), {
     target: { value: title },
@@ -39,10 +39,11 @@ describe("Workspace", () => {
 
   it("disables Verify Answer until answer and sources exist", async () => {
     render(<Workspace />);
-    // The empty state shows its own CTA alongside the main one — all disabled
+    // The Verify CTA is unique and disabled until answer + sources exist
     const verifyButtons = () =>
       screen.getAllByRole("button", { name: /verify answer/i });
-    for (const btn of verifyButtons()) expect(btn).toBeDisabled();
+    expect(verifyButtons().length).toBe(1);
+    expect(verifyButtons()[0]).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/rag-generated answer/i), {
       target: { value: "Paris is the capital of France." },

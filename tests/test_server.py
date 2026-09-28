@@ -1,8 +1,11 @@
 """Tests for the FastAPI web service."""
 
+import io
+
 import pytest
 from starlette.testclient import TestClient
 
+from rag_facts_check.documents import MAX_FILE_SIZE_BYTES
 from rag_facts_check.server import create_app
 
 
@@ -27,6 +30,130 @@ class TestHealth:
         data = response.json()
         assert data["status"] == "ok"
         assert "version" in data
+
+    def test_health_includes_model(self, client):
+        """The UI displays the configured model from /health."""
+        response = client.get("/health")
+        data = response.json()
+        assert "model" in data
+        assert isinstance(data["model"], str)
+        assert data["model"]  # non-empty
+
+    def test_health_never_leaks_secrets(self, client):
+        """/health must never expose the API key or other secrets."""
+        from rag_facts_check.server import _load_env
+
+        env = _load_env()
+        response = client.get("/health")
+        data = response.json()
+        body = response.text
+        api_key = env.get("LLM_API_KEY", "")
+        if api_key:
+            assert api_key not in body
+        assert "LLM_API_KEY" not in body
+        assert "api_key" not in body.lower()
+        # Only the whitelisted keys are present
+        assert set(data.keys()) <= {"status", "version", "model"}
+
+    def test_health_model_reflects_environment(self, client, monkeypatch):
+        """The model field comes from LLM_MODEL, never hardcoded."""
+        monkeypatch.setenv("LLM_MODEL", "test-model-from-env")
+        monkeypatch.setattr("os.path.exists", lambda p: False)  # skip .env load
+        app = create_app()
+        client2 = TestClient(app)
+        data = client2.get("/health").json()
+        assert data["model"] == "test-model-from-env"
+
+
+def _docx_bytes(paragraphs: list[str]) -> bytes:
+    import docx
+
+    document = docx.Document()
+    for p in paragraphs:
+        document.add_paragraph(p)
+    buf = io.BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
+class TestSourcesExtractEndpoint:
+    """Tests for POST /sources/extract (document upload)."""
+
+    def _upload(self, client, filename: str, data: bytes):
+        return client.post(
+            "/sources/extract",
+            files={"file": (filename, data)},
+        )
+
+    def test_txt_upload(self, client):
+        response = self._upload(client, "notes.txt", b"Hello source text.")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["filename"] == "notes.txt"
+        assert "Hello source text." in data["text"]
+        assert data["chars"] == len(data["text"]) > 0
+
+    def test_md_upload(self, client):
+        response = self._upload(client, "readme.md", b"# Title\n\nBody text.\n")
+        assert response.status_code == 200
+        data = response.json()
+        assert "# Title" in data["text"]
+
+    def test_docx_upload(self, client):
+        data = _docx_bytes(["DOCX body paragraph."])
+        response = self._upload(client, "report.docx", data)
+        assert response.status_code == 200
+        payload = response.json()
+        assert "DOCX body paragraph." in payload["text"]
+
+    def test_pdf_upload(self, client):
+        from tests.test_documents import _raw_pdf
+
+        data = _raw_pdf(["PDF extracted sentence."])
+        response = self._upload(client, "report.pdf", data)
+        assert response.status_code == 200
+        payload = response.json()
+        assert "PDF extracted sentence." in payload["text"]
+
+    def test_unsupported_extension_rejected(self, client):
+        response = self._upload(client, "evil.exe", b"MZ binary")
+        assert response.status_code == 422
+        assert "Unsupported file type" in response.json()["detail"]
+
+    def test_oversized_file_rejected_413(self, client):
+        response = self._upload(client, "big.txt", b"x" * (MAX_FILE_SIZE_BYTES + 1))
+        assert response.status_code == 413
+        assert "too large" in response.json()["detail"]
+
+    def test_empty_file_rejected(self, client):
+        response = self._upload(client, "empty.txt", b"")
+        assert response.status_code == 422
+
+    def test_no_text_document_rejected(self, client):
+        response = self._upload(client, "blank.txt", b"   \n\n  ")
+        assert response.status_code == 422
+        assert "extractable text" in response.json()["detail"]
+
+    def test_malformed_pdf_rejected(self, client):
+        response = self._upload(client, "broken.pdf", b"%PDF-1.4 garbage")
+        assert response.status_code == 422
+        assert "corrupted" in response.json()["detail"].lower()
+
+    def test_malformed_docx_rejected(self, client):
+        response = self._upload(client, "broken.docx", b"PK fake zip")
+        assert response.status_code == 422
+
+    def test_no_filesystem_path_leak(self, client):
+        """Errors and success responses never expose server paths."""
+        response = self._upload(client, "evil.exe", b"MZ")
+        body = response.text
+        assert "/tmp" not in body
+        assert "C:\\" not in body
+        assert "rag_facts_check" not in body
+
+    def test_no_missing_file_422(self, client):
+        response = client.post("/sources/extract")
+        assert response.status_code == 422
 
 
 class TestCheckRequestValidation:

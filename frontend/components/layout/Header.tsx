@@ -12,6 +12,8 @@ import { Button } from "@/components/ui/button";
 interface HeaderProps {
   status: ApiStatus;
   version: string | null;
+  /** Model configured on the backend (from GET /health) — never hardcoded. */
+  model: string | null;
   theme: Theme;
   onToggleTheme: () => void;
   onNewCheck: () => void;
@@ -19,14 +21,15 @@ interface HeaderProps {
 }
 
 const STATUS_META: Record<ApiStatus, { label: string; dot: string }> = {
-  unknown: { label: "Checking API…", dot: "bg-zinc-400" },
-  online: { label: "API connected", dot: "bg-emerald-500" },
-  offline: { label: "API offline", dot: "bg-red-500" },
+  unknown: { label: "Checking", dot: "bg-zinc-400" },
+  online: { label: "Connected", dot: "bg-emerald-500" },
+  offline: { label: "Offline", dot: "bg-red-500" },
 };
 
 export function Header({
   status,
   version,
+  model,
   theme,
   onToggleTheme,
   onNewCheck,
@@ -74,18 +77,33 @@ export function Header({
           <div
             role="status"
             aria-live="polite"
-            className="hidden items-center gap-1.5 rounded-full bg-surface-raised px-2.5 py-1 text-xs text-ink-muted ring-1 ring-line sm:flex"
+            aria-label={
+              model && status === "online"
+                ? `API ${meta.label}, model ${model}`
+                : `API ${meta.label}`
+            }
+            className="hidden min-w-0 items-center gap-1.5 rounded-full bg-surface-raised px-2.5 py-1 text-xs text-ink-muted ring-1 ring-line sm:flex"
           >
             <span
               aria-hidden
               className={cn(
-                "h-1.5 w-1.5 rounded-full",
+                "h-1.5 w-1.5 shrink-0 rounded-full",
                 meta.dot,
                 status === "unknown" && "animate-pulse",
               )}
             />
-            {meta.label}
-            {version ? <span className="text-ink-faint">v{version}</span> : null}
+            <span className="shrink-0">{meta.label}</span>
+            {status === "online" && model && (
+              <>
+                <span aria-hidden className="text-ink-faint">·</span>
+                <span
+                  title={model}
+                  className="max-w-[18ch] truncate font-mono text-[11px] text-ink"
+                >
+                  {model}
+                </span>
+              </>
+            )}
           </div>
 
           <div className="relative" ref={panelRef}>
@@ -104,16 +122,27 @@ export function Header({
                 <dl className="mt-3 space-y-2 text-xs">
                   <div className="flex items-center justify-between gap-4">
                     <dt className="text-ink-muted">Backend URL</dt>
-                    <dd className="font-mono text-ink">{apiBaseUrl}</dd>
+                    <dd className="truncate font-mono text-ink">{apiBaseUrl}</dd>
                   </div>
                   <div className="flex items-center justify-between gap-4">
                     <dt className="text-ink-muted">Backend status</dt>
                     <dd>{meta.label}</dd>
                   </div>
+                  {model ? (
+                    <div className="flex items-center justify-between gap-4">
+                      <dt className="shrink-0 text-ink-muted">Model</dt>
+                      <dd
+                        title={model}
+                        className="break-all text-right font-mono text-ink"
+                      >
+                        {model}
+                      </dd>
+                    </div>
+                  ) : null}
                   {version ? (
                     <div className="flex items-center justify-between gap-4">
                       <dt className="text-ink-muted">Version</dt>
-                      <dd>{version}</dd>
+                      <dd>v{version}</dd>
                     </div>
                   ) : null}
                 </dl>

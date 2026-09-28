@@ -13,6 +13,7 @@ export type ApiStatus = "unknown" | "online" | "offline";
 export function useApiStatus(intervalMs = 30000) {
   const [status, setStatus] = useState<ApiStatus>("unknown");
   const [version, setVersion] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const check = useCallback(async () => {
@@ -20,9 +21,11 @@ export function useApiStatus(intervalMs = 30000) {
       const health = await getHealth();
       setStatus("online");
       setVersion(health.version ?? null);
+      setModel(health.model ?? null);
     } catch {
       setStatus("offline");
       setVersion(null);
+      setModel(null);
     }
   }, []);
 
@@ -34,5 +37,5 @@ export function useApiStatus(intervalMs = 30000) {
     };
   }, [check, intervalMs]);
 
-  return { status, version, check };
+  return { status, version, model, check };
 }

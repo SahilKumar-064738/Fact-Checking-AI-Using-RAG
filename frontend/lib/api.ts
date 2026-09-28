@@ -7,6 +7,7 @@
  */
 
 import type {
+  ExtractSourceResponse,
   HalloumiRequest,
   HalloumiResponse,
   HealthResponse,
@@ -75,6 +76,44 @@ export async function verifyAnswer(request: HalloumiRequest): Promise<HalloumiRe
   } catch {
     throw new ApiError("The verification service returned an unexpected response.");
   }
+}
+
+/**
+ * POST /sources/extract — extract readable text from an uploaded document.
+ *
+ * The backend processes the file in memory (PDF/DOCX/TXT/MD) and returns
+ * normalized source text. Errors surface as ApiError with the backend's
+ * user-safe detail message.
+ */
+export async function extractSourceDocument(file: File): Promise<ExtractSourceResponse> {
+  const form = new FormData();
+  form.append("file", file);
+
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBaseUrl()}/sources/extract`, {
+      method: "POST",
+      body: form,
+    });
+  } catch {
+    throw new ApiError("RAG Facts Check couldn't reach the verification backend.");
+  }
+
+  if (!res.ok) {
+    const detail = await safeDetail(res);
+    // Prefer the backend's specific, user-safe message (e.g. "This PDF
+    // does not contain extractable text…") over the generic one.
+    let message: string | undefined;
+    try {
+      const parsed = JSON.parse(detail || "{}") as { detail?: unknown };
+      if (typeof parsed.detail === "string" && parsed.detail) message = parsed.detail;
+    } catch {
+      // non-JSON body — fall through to the generic message
+    }
+    throw new ApiError(message ?? humanMessage(res.status), res.status, detail);
+  }
+
+  return (await res.json()) as ExtractSourceResponse;
 }
 
 async function safeDetail(res: Response): Promise<string | undefined> {

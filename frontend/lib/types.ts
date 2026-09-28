@@ -56,6 +56,15 @@ export interface HalloumiResponse {
 export interface HealthResponse {
   status: string;
   version?: string;
+  /** Model configured on the backend (never includes secrets). */
+  model?: string;
+}
+
+/** Response of POST /sources/extract. */
+export interface ExtractSourceResponse {
+  filename: string;
+  text: string;
+  chars: number;
 }
 
 /** A source document entered by the user (frontend state only). */
@@ -66,6 +75,10 @@ export interface SourceDoc {
   text: string;
   sourceType: SourceType;
   url: string;
+  /** Original file name for uploaded documents. */
+  fileName?: string;
+  /** File kind label (PDF/DOCX/TXT/MD) for uploaded documents. */
+  fileKind?: string;
 }
 
 export type SourceType = "text" | "web" | "file" | "other";

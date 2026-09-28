@@ -16,11 +16,12 @@ import logging
 import os
 import sys
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
+from .documents import MAX_FILE_SIZE_BYTES, DocumentExtractionError, extract_text
 from .models import Span
 from .spans import find_evidence_span_in_doc
 
@@ -224,8 +225,53 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
-        """Health check endpoint."""
-        return {"status": "ok", "version": "0.2.0"}
+        """Health check endpoint.
+
+        Includes the configured model name so the UI can display it.
+        Never exposes the API key or any other secret.
+        """
+        env = _load_env()
+        return {
+            "status": "ok",
+            "version": "0.2.0",
+            "model": env.get("LLM_MODEL", "gemma"),
+        }
+
+    @app.post("/sources/extract")
+    async def extract_source(file: UploadFile) -> dict:
+        """Extract readable text from an uploaded document.
+
+        The file is processed entirely in memory — nothing is written
+        to disk, stored, or executed. The returned text is the same
+        normalized source text the verification pipeline consumes.
+
+        Response: {"filename", "text", "chars"}
+        """
+        filename = file.filename or ""
+        try:
+            data = await file.read()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="The upload could not be read.") from e
+
+        if len(data) > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(f"The file is too large (max {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB)."),
+            )
+
+        try:
+            text = extract_text(filename, data, content_type=file.content_type)
+        except DocumentExtractionError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        except Exception:
+            log.exception("sources/extract failed for %r", filename)
+            raise HTTPException(
+                status_code=422, detail="The document could not be processed."
+            ) from None
+
+        # Log metadata only — never document contents.
+        log.info("sources/extract: %r -> %d chars", filename, len(text))
+        return {"filename": filename, "text": text, "chars": len(text)}
 
     @app.post("/halloumi/generate")
     async def halloumi_generate(request: HalloumiRequest) -> dict:
@@ -349,9 +395,7 @@ def create_app() -> FastAPI:
         documents = [{"doc_id": d.doc_id, "text": d.text} for d in request.documents]
 
         try:
-            batch_size = (
-                request.options.batch_size if request.options else None
-            )
+            batch_size = request.options.batch_size if request.options else None
             report = await checker.check(
                 answer=request.answer,
                 documents=documents,

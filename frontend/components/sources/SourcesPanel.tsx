@@ -4,15 +4,9 @@ import { Eye, FileText, Globe, Plus, Trash2 } from "lucide-react";
 
 import type { SourceDoc } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { sourceDomain, sourceTypeLabel } from "@/lib/sourceDisplay";
 
 import { Button } from "@/components/ui/button";
-
-const TYPE_LABEL: Record<SourceDoc["sourceType"], string> = {
-  text: "Pasted text",
-  web: "Web",
-  file: "File",
-  other: "Other",
-};
 
 const TYPE_ICON: Record<SourceDoc["sourceType"], typeof FileText> = {
   text: FileText,
@@ -30,8 +24,9 @@ interface SourcesPanelProps {
 }
 
 /**
- * The source context the answer will be verified against. Presented with
- * real visual weight: verification is meaningless without it.
+ * The source context the answer will be verified against. The header
+ * button is the single primary "Add source" CTA — the empty state is
+ * intentionally button-free so the action is never duplicated.
  */
 export function SourcesPanel({
   sources,
@@ -46,7 +41,7 @@ export function SourcesPanel({
       className="rounded-lg bg-surface-raised shadow-card ring-1 ring-line"
     >
       <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
-        <div>
+        <div className="min-w-0">
           <h2 id="sources-heading" className="flex items-center gap-2 text-sm font-semibold">
             Sources
             {sources.length > 0 && (
@@ -59,36 +54,36 @@ export function SourcesPanel({
             The documents the answer is verified against.
           </p>
         </div>
-        <Button variant="secondary" size="sm" disabled={disabled} onClick={onAdd}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="shrink-0"
+          disabled={disabled}
+          onClick={onAdd}
+        >
           <Plus aria-hidden className="h-3.5 w-3.5" />
           Add source
         </Button>
       </div>
 
-      <div className="space-y-2 p-3">
+      <div className="p-3">
         {sources.length === 0 ? (
-          <div className="rounded-md border border-dashed border-line-strong p-5 text-center">
+          <div
+            data-testid="sources-empty-state"
+            className="rounded-md border border-dashed border-line-strong px-5 py-7 text-center"
+          >
             <FileText aria-hidden className="mx-auto h-5 w-5 text-ink-faint" />
             <p className="mt-2 text-sm font-medium">No sources yet</p>
-            <p className="mt-1 text-xs leading-5 text-ink-muted">
-              Verification needs at least one source document. Paste the text
-              the answer was generated from.
+            <p className="mx-auto mt-1 max-w-[26ch] text-xs leading-5 text-ink-muted">
+              Add text, a web link, or a document containing the evidence used
+              to generate this answer.
             </p>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="mt-3"
-              disabled={disabled}
-              onClick={onAdd}
-            >
-              <Plus aria-hidden className="h-3.5 w-3.5" />
-              Add source
-            </Button>
           </div>
         ) : (
           <ol className="space-y-2">
             {sources.map((source, i) => {
               const Icon = TYPE_ICON[source.sourceType];
+              const domain = sourceDomain(source.url);
               return (
                 <li
                   key={source.id}
@@ -103,19 +98,21 @@ export function SourcesPanel({
                         >
                           {i + 1}
                         </span>
-                        <span className="truncate">{source.title}</span>
+                        <span className="truncate" title={source.title}>
+                          {source.title}
+                        </span>
                       </p>
                       <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-muted">
                         <Icon aria-hidden className="h-3 w-3 shrink-0" />
-                        {TYPE_LABEL[source.sourceType]}
+                        {sourceTypeLabel(source)}
                         <span aria-hidden>·</span>
                         {source.text.length.toLocaleString()} chars
                       </p>
-                      {source.url && (
+                      {domain && (
                         <p className="mt-0.5 truncate text-[11px] text-ink-faint">
-                          {source.url}
+                          {domain}
                         </p>
-                      )}
+                        )}
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5">
                       <Button

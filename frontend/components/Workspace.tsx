@@ -19,7 +19,7 @@ import type { HalloumiRequest, SourceDoc } from "@/lib/types";
 
 export function Workspace() {
   const { theme, toggleTheme } = useTheme();
-  const { status, version, check } = useApiStatus();
+  const { status, version, model, check } = useApiStatus();
   const verification = useVerification();
 
   const [answer, setAnswer] = useState("");
@@ -97,6 +97,7 @@ export function Workspace() {
       <Header
         status={status}
         version={version}
+        model={model}
         theme={theme}
         onToggleTheme={toggleTheme}
         onNewCheck={handleNewCheck}

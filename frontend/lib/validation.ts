@@ -9,6 +9,7 @@ import { z } from "zod";
 export const HealthResponseSchema = z.object({
   status: z.string(),
   version: z.string().optional(),
+  model: z.string().optional(),
 });
 
 const SegmentSchema = z.object({
