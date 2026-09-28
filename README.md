@@ -149,6 +149,29 @@ docker build -t rag-fact-check .
 docker run -p 8000:8000 -e LLM_API_BASE=http://host.docker.internal:4002/v1 rag-fact-check
 ```
 
+### Frontend (Next.js Web UI)
+
+The repository includes a Next.js 14 frontend in [`frontend/`](frontend/) — an interactive verification workspace with an answer editor, source management, real SSE progress streaming (no fabricated stages), and per-claim results with evidence highlighting.
+
+```bash
+cd frontend
+npm install
+
+# Point the UI at the FastAPI backend (defaults to http://localhost:8000)
+cp .env.local.example .env.local
+# Edit .env.local only if your backend runs somewhere else
+
+npm run dev     # http://localhost:3000
+```
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | Base URL of the FastAPI backend. This is the only frontend environment variable. **Never** put `LLM_API_KEY` or any other backend secret here — every `NEXT_PUBLIC_*` value is shipped to the browser. |
+
+The frontend talks to the backend directly from the browser (`GET /health`, `POST /halloumi/generate`, `POST /halloumi/generate/stream` over SSE) and falls back to the blocking endpoint automatically if streaming is unavailable. LLM credentials stay on the backend; nothing sensitive reaches the browser.
+
+Production deployment — frontend on **Vercel**, backend on **GCP Compute Engine** with systemd + reverse proxy + HTTPS — is documented step-by-step in [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
+
 ---
 
 ## API Endpoints
@@ -234,6 +257,7 @@ Full documentation is available in [`docs/`](docs/index.md):
 - **[Answer Quality Score](docs/architecture/answer-quality-score.md)** — Scoring formula, weights, and calibration
 - **[Web Service Guide](docs/guides/web-service.md)** — Endpoints, request schemas, and integration examples
 - **[Testing Guide](docs/guides/testing.md)** — Test suite layout, fixtures, and coverage
+- **[Production Deployment Guide](DEPLOYMENT_GUIDE.md)** — Vercel (Next.js frontend) + GCP Compute Engine (FastAPI backend) deployment, environment variables, systemd, HTTPS, CORS, and SSE configuration
 
 ---
 
