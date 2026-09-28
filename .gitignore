@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files (never commit credentials)
+.env
+.env.local
+# Backend variant files (may contain API keys; activate with: make use-env ENV=<name>)
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated output
+output/
+report.json
+
+# Local-only scripts (may contain credentials — never commit)
+scripts/local/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache/
+
+# Generated datasets (JSONL output from generator)
+mock_datasets/*_generated.jsonl
+mock_datasets/all_*.jsonl
+
+# Artifacts (debug data, HAR files, POCs, discovery notes)
+artifacts/
+test2.*

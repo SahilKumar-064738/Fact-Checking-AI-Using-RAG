@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface: 250 250 251;
+  --surface-raised: 255 255 255;
+  --surface-sunken: 244 244 246;
+  --ink: 24 24 27;
+  --ink-muted: 82 82 91;
+  --ink-faint: 140 140 150;
+  --line: 228 228 231;
+  --line-strong: 212 212 216;
+  --accent: 37 99 235;
+  --accent-soft: 239 246 255;
+}
+
+.dark {
+  --surface: 12 12 14;
+  --surface-raised: 22 22 26;
+  --surface-sunken: 8 8 10;
+  --ink: 244 244 245;
+  --ink-muted: 161 161 170;
+  --ink-faint: 113 113 122;
+  --line: 39 39 45;
+  --line-strong: 58 58 66;
+  --accent: 96 165 250;
+  --accent-soft: 23 37 84;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-surface text-ink;
+  }
+  ::selection {
+    @apply bg-accent/20;
+  }
+  /* Visible focus states for keyboard navigation */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-surface;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Subtle scrollbar for source previews */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-line-strong;
+}

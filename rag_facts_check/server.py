@@ -1,0 +1,591 @@
+"""
+FastAPI web service for the RAG fact-checking pipeline.
+
+Exposes ``POST /check`` for async fact-checking of RAG answers.
+Reads LLM configuration from environment variables at startup.
+
+Usage::
+
+    uvicorn rag_facts_check.server:app --host 0.0.0.0 --port 8000
+"""
+
+import asyncio
+import contextlib
+import json
+import logging
+import os
+import sys
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
+
+from .models import Span
+from .spans import find_evidence_span_in_doc
+
+# Configure logging for development
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    stream=sys.stdout,
+)
+log = logging.getLogger("rag_facts_check")
+
+
+def _load_env() -> dict[str, str]:
+    """Load environment variables from .env file if present."""
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    env_vars: dict[str, str] = {}
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(env_path)
+    except ImportError:
+        pass  # python-dotenv not installed, rely on system env
+
+    for key in (
+        "LLM_API_BASE",
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "LLM_TEMPERATURE",
+        "LLM_MAX_TOKENS",
+        "LLM_TIMEOUT",
+        "LLM_EXTRA_BODY",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env_vars[key] = value
+    return env_vars
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+
+class DocumentInput(BaseModel):
+    """A source document with an optional identifier."""
+
+    doc_id: str = Field(..., description="Unique document identifier")
+    text: str = Field(..., description="Document text")
+
+
+class CheckOptions(BaseModel):
+    """Optional overrides for the fact-checking pipeline."""
+
+    max_claims: int | None = Field(None, description="Maximum number of claims to verify")
+    num_consistency_runs: int = Field(1, description="Self-consistency runs (1 = single pass)")
+    evidence_first: bool = Field(True, description="Use evidence-first multi-step prompting")
+    use_evidence_retrieval: bool = Field(True, description="Retrieve relevant chunks per claim")
+    batch_size: int | None = Field(
+        None, description="Number of claims to verify per LLM call (default: 20)"
+    )
+
+
+class CheckRequest(BaseModel):
+    """Request body for POST /check."""
+
+    answer: str = Field(..., description="RAG-generated answer to verify")
+    documents: list[DocumentInput] = Field(
+        ..., description="Source documents retrieved by the RAG system"
+    )
+    options: CheckOptions | None = Field(None, description="Optional pipeline overrides")
+
+
+class HalloumiSource(BaseModel):
+    """A structured source document with optional metadata."""
+
+    text: str = Field(..., description="Document text")
+    title: str | None = Field(None, description="Document title or semantic identifier")
+    source_type: str | None = Field(None, description="Source type (web, file, etc.)")
+    link: str | None = Field(None, description="Source URL")
+
+
+class HalloumiRequest(BaseModel):
+    """Request body for POST /halloumi/generate (halloumi-compatible)."""
+
+    answer: str = Field(..., description="RAG-generated answer to verify")
+    sources: list[str | HalloumiSource] = Field(
+        ..., description="Source documents as plain strings or structured dicts"
+    )
+    max_context_segments: int = Field(0, description="Max context segments (unused, for compat)")
+    batch_size: int | None = Field(None, description="Claims per LLM call (default: 20)")
+
+
+# ---------------------------------------------------------------------------
+# App factory
+# ---------------------------------------------------------------------------
+
+
+def create_app() -> FastAPI:
+    """Create and configure the FastAPI application."""
+    app = FastAPI(
+        title="RAG Facts Check",
+        description=(
+            "Fact-checking service for RAG-generated answers. "
+            "Extracts claims, verifies each against source documents, "
+            "and returns a detailed report."
+        ),
+        version="0.2.0",
+    )
+
+    # CORS
+    cors_origins_str = os.environ.get("CORS_ORIGINS", "*")
+    cors_origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Lazy LLM initialization
+    _llm = None
+    _checker = None
+
+    def _get_checker():
+        nonlocal _llm, _checker
+        if _checker is None:
+            from .checker import RAGFactsChecker
+            from .llm import AsyncAPILLM
+
+            env = _load_env()
+            api_base = env.get("LLM_API_BASE", "http://localhost:4002/v1")
+            api_key = env.get("LLM_API_KEY")
+            model = env.get("LLM_MODEL", "gemma")
+            temperature = float(env.get("LLM_TEMPERATURE", "0.1"))
+            max_tokens = int(env.get("LLM_MAX_TOKENS", "512"))
+            timeout = float(env.get("LLM_TIMEOUT", "120"))
+            try:
+                extra_body = json.loads(env.get("LLM_EXTRA_BODY", "{}"))
+            except json.JSONDecodeError:
+                log.warning("LLM_EXTRA_BODY is not valid JSON, ignoring")
+                extra_body = {}
+
+            api_url = api_base.rstrip("/") + "/chat/completions"
+            _llm = AsyncAPILLM(
+                api_url=api_url,
+                model_name=model,
+                api_key=api_key,
+                temperature=temperature,
+                chat_mode=True,
+                max_new_tokens=max_tokens,
+                timeout=timeout,
+                extra_body=extra_body,
+            )
+
+            # Build instructor-wrapped client for structured output
+            try:
+                import instructor
+                from openai import AsyncOpenAI
+
+                base_url = api_base.rstrip("/")
+                openai_client = AsyncOpenAI(
+                    base_url=base_url,
+                    api_key=api_key or "not-needed",
+                )
+                if extra_body:
+                    # This openai SDK version has no client-level extra_body,
+                    # so inject it into every chat.completions.create call.
+                    _original_create = openai_client.chat.completions.create
+
+                    async def _create_with_extra_body(*args, **kwargs):
+                        extra = dict(kwargs.get("extra_body") or {})
+                        extra.update(extra_body)
+                        kwargs["extra_body"] = extra
+                        return await _original_create(*args, **kwargs)
+
+                    openai_client.chat.completions.create = _create_with_extra_body
+                instructor_client = instructor.from_openai(
+                    openai_client, mode=instructor.Mode.MD_JSON
+                )
+            except ImportError:
+                instructor_client = None
+                log.warning(
+                    "instructor/openai not available, falling back to raw LLM calls. "
+                    "Install with: pip install instructor openai"
+                )
+
+            _checker = RAGFactsChecker(
+                _llm,
+                instructor_client=instructor_client,
+                model=model,
+                temperature=temperature,
+                max_new_tokens=max_tokens,
+                max_extraction_tokens=max_tokens,
+            )
+        return _checker
+
+    # -----------------------------------------------------------------------
+    # Routes
+    # -----------------------------------------------------------------------
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        """Health check endpoint."""
+        return {"status": "ok", "version": "0.2.0"}
+
+    @app.post("/halloumi/generate")
+    async def halloumi_generate(request: HalloumiRequest) -> dict:
+        """Halloumi-compatible endpoint for claim verification.
+
+        Accepts the same request format as the halloumi middleware and
+        returns a response in halloumi's format so the existing frontend
+        components work without changes.
+
+        Request: {"answer": "...", "sources": ["doc1...", "doc2..."]}
+        Response: {"answer_score": 0-10, "claims": [...], "segments": {...}}
+        """
+        checker = _get_checker()
+
+        documents, raw_texts = _normalize_halloumi_sources(request.sources)
+
+        log.info(
+            "halloumi/generate: answer=%d chars, sources=%d docs (%d non-empty)",
+            len(request.answer),
+            len(request.sources),
+            len(documents),
+        )
+
+        try:
+            report = await checker.check(
+                answer=request.answer,
+                documents=documents,
+                batch_size=request.batch_size,
+            )
+            log.info(
+                "halloumi/generate: claims=%d, results=%d, verdict=%s",
+                len(report.claims),
+                len(report.results),
+                report.overall_verdict,
+            )
+            for i, c in enumerate(report.claims):
+                log.info("  claim[%d]: span=%s text=%s", i, c.span, c.text[:80])
+            for i, r in enumerate(report.results):
+                log.info(
+                    "  result[%d]: verdict=%s confidence=%d span=%s",
+                    i,
+                    r.verdict,
+                    r.confidence,
+                    r.evidence_span,
+                )
+            return _to_halloumi_format(report, raw_texts, request.answer)
+        except Exception as e:
+            log.exception("halloumi/generate error")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/halloumi/generate/stream")
+    async def halloumi_generate_stream(request: HalloumiRequest) -> StreamingResponse:
+        """Streaming variant of /halloumi/generate using Server-Sent Events.
+
+        Emits real pipeline progress events (never fabricated) and the final
+        halloumi-format result. /halloumi/generate remains the blocking,
+        backwards-compatible endpoint; this one is additive.
+
+        Event types (SSE ``event:`` lines):
+        - ``stage``: {"event": "started" | "extracting_claims" | ...}
+        - ``result``: the halloumi-format response (same as /halloumi/generate)
+        - ``error``: {"detail": "..."}
+        """
+
+        async def event_stream():
+            queue: asyncio.Queue = asyncio.Queue()
+
+            def on_progress(event: str, payload: dict) -> None:
+                # Never let progress reporting break verification
+                with contextlib.suppress(Exception):
+                    queue.put_nowait(("stage", {"event": event, **payload}))
+
+            async def run_check():
+                try:
+                    checker = _get_checker()
+                    documents, raw_texts = _normalize_halloumi_sources(request.sources)
+                    report = await checker.check(
+                        answer=request.answer,
+                        documents=documents,
+                        batch_size=request.batch_size,
+                        progress_callback=on_progress,
+                    )
+                    queue.put_nowait(
+                        ("result", _to_halloumi_format(report, raw_texts, request.answer))
+                    )
+                except Exception as e:
+                    log.exception("halloumi/generate/stream error")
+                    queue.put_nowait(("error", {"detail": str(e)}))
+
+            task = asyncio.create_task(run_check())
+            try:
+                while True:
+                    event, data = await queue.get()
+                    yield f"event: {event}\ndata: {json.dumps(data)}\n\n"
+                    if event in ("result", "error"):
+                        break
+            finally:
+                if not task.done():
+                    task.cancel()
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/check")
+    async def check(request: CheckRequest) -> dict:
+        """Run the fact-checking pipeline on a RAG answer.
+
+        Accepts an answer and source documents, extracts claims,
+        verifies each claim against the documents, and returns a
+        detailed report with per-claim verdicts and evidence.
+        """
+        checker = _get_checker()
+
+        # Build documents list for the checker
+        documents = [{"doc_id": d.doc_id, "text": d.text} for d in request.documents]
+
+        try:
+            batch_size = (
+                request.options.batch_size if request.options else None
+            )
+            report = await checker.check(
+                answer=request.answer,
+                documents=documents,
+                batch_size=batch_size,
+            )
+            return report.to_dict()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return app
+
+
+# Default app instance for uvicorn
+app = create_app()
+
+
+# ---------------------------------------------------------------------------
+# Halloumi response adapter
+# ---------------------------------------------------------------------------
+
+
+def _normalize_halloumi_sources(
+    sources: list[str | HalloumiSource],
+) -> tuple[list[dict[str, str | None]], list[str]]:
+    """Normalize halloumi sources into document dicts and raw texts.
+
+    Returns:
+        Tuple of ``(documents, raw_texts)`` where ``documents`` is the list
+        passed to the checker and ``raw_texts`` is the list of source texts
+        used by :func:`_to_halloumi_format` for span mapping.
+    """
+    documents: list[dict[str, str | None]] = []
+    raw_texts: list[str] = []
+    for i, src in enumerate(sources):
+        if isinstance(src, str):
+            text = src.strip()
+            if not text:
+                continue
+            documents.append({"doc_id": f"doc_{i + 1}", "text": text})
+            raw_texts.append(text)
+        else:
+            # Structured HalloumiSource
+            text = src.text.strip() if src.text else ""
+            if not text:
+                continue
+            doc: dict[str, str | None] = {
+                "doc_id": f"doc_{i + 1}",
+                "text": text,
+            }
+            if src.title:
+                doc["title"] = src.title
+            documents.append(doc)
+            raw_texts.append(text)
+    return documents, raw_texts
+
+
+def _find_source_index(evidence: str, sources: list[str]) -> int | None:
+    """Find which source document contains the evidence text.
+
+    Searches each source using robust evidence span matching (exact,
+    whitespace-flexible regex, and word-boundary matching).
+    Returns the source index or None.
+    """
+    if not evidence or evidence == "N/A":
+        return None
+
+    # Try robust evidence span matching first
+    for i, source in enumerate(sources):
+        span = find_evidence_span_in_doc(evidence, source)
+        if span is not None:
+            return i
+
+    # Fallback to normalized substring match if find_evidence_span_in_doc didn't catch it
+    normalized = " ".join(evidence.split()).lower()
+    if len(normalized) >= 10:
+        for i, source in enumerate(sources):
+            source_normalized = " ".join(source.split()).lower()
+            if normalized in source_normalized:
+                return i
+    return None
+
+
+def _to_halloumi_format(report, sources: list[str], answer_text: str = "") -> dict:
+    """Convert a CheckReport to halloumi-compatible response format.
+
+    Halloumi format:
+    {
+      "answer_score": 7.5,
+      "claims": [
+        {
+          "startOffset": 12,
+          "endOffset": 58,
+          "segmentIds": ["0", "2"],
+          "score": 1.0,
+          "rationale": "...",
+          "verdict": "supported",
+          "evidence": "...",
+          "confidence": 0,
+          "document_index": 1
+        }
+      ],
+      "segments": {
+        "0": {"startOffset": 45, "endOffset": 92},
+        "2": {"startOffset": 200, "endOffset": 250}
+      }
+    }
+
+    The segments are computed from evidence_spans, mapped into the
+    joined sources string so the frontend can highlight them.
+
+    Per-claim score is verdict-based (not raw LLM confidence):
+    - supported: 1.0
+    - not_enough_info: 0.4
+    - contradicted: 0.0
+    """
+    # Verdict-to-score mapping for per-claim scores
+    verdict_scores = {
+        "supported": 1.0,
+        "not_enough_info": 0.4,
+        "contradicted": 0.0,
+    }
+
+    # Build a mapping from source index to start offset in joined string
+    source_offsets: list[int] = []
+    offset = 0
+    for src in sources:
+        source_offsets.append(offset)
+        offset += len(src)
+
+    segments: dict[str, dict[str, int]] = {}
+    claims: list[dict] = []
+
+    for result in report.results:
+        claim = report.claims[result.claim_index - 1]
+
+        # Build claim span — if the LLM paraphrased the claim and no span
+        # was found, mark it as skipped so the frontend doesn't try to
+        # render it inline (full-answer-range claims overlap every text node
+        # and cause text duplication).
+        skipped = False
+        if claim.span:
+            start_offset = claim.span.start
+            end_offset = claim.span.end
+        else:
+            log.debug(
+                "_to_halloumi: claim[%d] has no span (LLM paraphrased), marking as skipped",
+                result.claim_index,
+            )
+            skipped = True
+            start_offset = 0
+            end_offset = len(answer_text)
+
+        # Build segment IDs from evidence spans
+        segment_ids: list[str] = []
+        source_idx = None
+        evidence_span = result.evidence_span
+
+        # Prefer document_index if already identified by the checker
+        if result.document_index is not None and 0 <= result.document_index < len(sources):
+            source_idx = result.document_index
+
+        evidence_text = result.evidence.strip().strip('"') if result.evidence else ""
+        if evidence_text and evidence_text != "N/A":
+            if source_idx is None:
+                source_idx = _find_source_index(evidence_text, sources)
+            if evidence_span is None and source_idx is not None:
+                matched_span = find_evidence_span_in_doc(evidence_text, sources[source_idx])
+                if matched_span:
+                    evidence_span = Span(start=matched_span[0], end=matched_span[1])
+
+        if evidence_span and evidence_span.start != evidence_span.end:
+            if source_idx is not None:
+                joined_start = source_offsets[source_idx] + evidence_span.start
+                joined_end = source_offsets[source_idx] + evidence_span.end
+            else:
+                # Fallback: use raw offsets (may be wrong)
+                log.debug(
+                    "_to_halloumi: evidence doc index not found in sources, using raw span %s-%s",
+                    evidence_span.start,
+                    evidence_span.end,
+                )
+                joined_start = evidence_span.start
+                joined_end = evidence_span.end
+
+            # Skip zero-length or invalid spans
+            if joined_start >= 0 and joined_end > joined_start:
+                seg_id = str(len(segments))
+                segments[seg_id] = {
+                    "id": int(seg_id),
+                    "startOffset": joined_start,
+                    "endOffset": joined_end,
+                }
+                segment_ids.append(seg_id)
+            else:
+                log.debug(
+                    "_to_halloumi: skipping invalid span %s-%s for claim[%d]",
+                    joined_start,
+                    joined_end,
+                    result.claim_index,
+                )
+
+        # Verdict-based score (not raw LLM confidence)
+        score = verdict_scores.get(result.verdict, 0.4)
+
+        # Extract the claim text from the answer using the span
+        claim_string = answer_text[start_offset:end_offset] if claim.span else claim.text
+
+        claims.append(
+            {
+                "claimString": claim_string,
+                "startOffset": start_offset,
+                "endOffset": end_offset,
+                "segmentIds": segment_ids,
+                "score": score,
+                "rationale": result.explanation,
+                "skipped": skipped,
+                # Additive detail fields for the web UI (existing
+                # consumers ignore unknown keys)
+                "verdict": result.verdict,
+                "evidence": result.evidence,
+                "confidence": result.confidence,
+                "document_index": result.document_index,
+            }
+        )
+
+    with_spans = sum(1 for r in report.results if report.claims[r.claim_index - 1].span)
+    log.info(
+        "_to_halloumi: %d claims in output (of %d results, %d with spans)",
+        len(claims),
+        len(report.results),
+        with_spans,
+    )
+    return {
+        "answer_score": report.answer_score,
+        "claims": claims,
+        "segments": segments,
+    }
