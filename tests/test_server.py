@@ -107,7 +107,7 @@ class TestSourcesExtractEndpoint:
         assert "DOCX body paragraph." in payload["text"]
 
     def test_pdf_upload(self, client):
-        from tests.test_documents import _raw_pdf
+        from test_documents import _raw_pdf
 
         data = _raw_pdf(["PDF extracted sentence."])
         response = self._upload(client, "report.pdf", data)

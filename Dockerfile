@@ -32,22 +32,28 @@ CMD ["sh", "-c", "ruff check rag_facts_check/ tests/ scripts/; ruff format --che
 # ---------------------------------------------------------------------------
 FROM base AS runtime
 
-# Install dependencies first (layer caching)
+# Install the package with all runtime dependencies (non-editable, so the
+# image is self-contained). setuptools package discovery requires
+# rag_facts_check/ to be present at install time.
 COPY pyproject.toml ./
-RUN pip install -e ".[server]"
-
-# Copy application code
 COPY rag_facts_check/ ./rag_facts_check/
 # prompts.py loads these at import time (Path(__file__).parent.parent / "prompts").
 COPY prompts/ ./prompts/
+RUN pip install ".[server]"
 
 # Run as non-root user
 RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
 
-EXPOSE 8000
+# Render injects $PORT (typically 10000); the runtime command below uses it
+# with a 10000 fallback, so EXPOSE documents that default only.
+EXPOSE 10000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+# Shell-form CMD: $PORT is expanded when the container starts, so the same
+# image works on Render (PORT injected) and locally (falls back to 10000).
+# One worker by default — Render's small instances (~0.1 CPU / 512 MB) cannot
+# sustain multiple forked uvicorn workers; override with WEB_CONCURRENCY if needed.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '10000') + '/health')" || exit 1
 
-CMD ["uvicorn", "rag_facts_check.server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["/bin/sh", "-c", "uvicorn rag_facts_check.server:app --host 0.0.0.0 --port ${PORT:-10000} --workers ${WEB_CONCURRENCY:-1}"]

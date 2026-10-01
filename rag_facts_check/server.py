@@ -6,7 +6,10 @@ Reads LLM configuration from environment variables at startup.
 
 Usage::
 
-    uvicorn rag_facts_check.server:app --host 0.0.0.0 --port 8000
+    uvicorn rag_facts_check.server:app --host 0.0.0.0 --port ${PORT:-10000}
+
+The port comes from the ``PORT`` environment variable on Render; use
+``--port 8000`` (or set ``PORT=8000``) for local development.
 """
 
 import asyncio
