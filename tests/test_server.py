@@ -64,6 +64,11 @@ class TestHealth:
         data = client2.get("/health").json()
         assert data["model"] == "test-model-from-env"
 
+    def test_health_head_returns_200(self, client):
+        """UptimeRobot Free sends HEAD — it must get 200, not 405."""
+        response = client.head("/health")
+        assert response.status_code == 200
+
 
 def _docx_bytes(paragraphs: list[str]) -> bytes:
     import docx
