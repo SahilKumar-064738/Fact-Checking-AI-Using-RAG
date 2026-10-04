@@ -15,17 +15,19 @@
   --accent-soft: 239 246 255;
 }
 
+/* Dark mode is the reactor palette: warm near-blacks tinted toward the
+   amber hue, amber accent (#FFB400) for actions and state. */
 .dark {
-  --surface: 12 12 14;
-  --surface-raised: 22 22 26;
-  --surface-sunken: 8 8 10;
-  --ink: 244 244 245;
-  --ink-muted: 161 161 170;
-  --ink-faint: 113 113 122;
-  --line: 39 39 45;
-  --line-strong: 58 58 66;
-  --accent: 96 165 250;
-  --accent-soft: 23 37 84;
+  --surface: 10 7 5;
+  --surface-raised: 21 15 10;
+  --surface-sunken: 6 4 3;
+  --ink: 240 235 226;
+  --ink-muted: 168 158 144;
+  --ink-faint: 122 112 100;
+  --line: 46 34 24;
+  --line-strong: 64 47 32;
+  --accent: 255 180 0;
+  --accent-soft: 61 41 8;
 }
 
 @layer base {
@@ -63,4 +65,100 @@
 }
 .thin-scroll::-webkit-scrollbar-thumb {
   @apply rounded-full bg-line-strong;
+}
+
+/* --- Reactor ambient (ReactorBackground) --------------------------------
+   Decorative backdrop only. The global prefers-reduced-motion rule above
+   freezes every one of these animations for users who opt out. */
+
+.rfc-origin {
+  transform-origin: 500px 500px;
+}
+
+@keyframes rfc-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Heavy rotation — tilted orbit sweeps gyroscopically (38s ease-in-out) */
+@keyframes rfc-gyro-sweep {
+  0%,
+  100% {
+    transform: rotate(31deg);
+  }
+  50% {
+    transform: rotate(39deg);
+  }
+}
+
+/* Nucleus jitter — local trajectory over 14s */
+@keyframes rfc-nucleus-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate(35px, -30px) rotate(180deg);
+  }
+}
+
+/* Technical shutters — brightness pulse 0.3 → 1.0 over 6s */
+@keyframes rfc-shutter-travel {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+    filter: brightness(1.8);
+  }
+}
+
+/* Energy packets — dash blip travelling the circuit (dasharray 60 340) */
+@keyframes rfc-energy-packet {
+  to {
+    stroke-dashoffset: -400;
+  }
+}
+
+/* Pulsing satellite nodes — 1.15x scale + brightness */
+@keyframes rfc-node-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+.rfc-drift {
+  animation: rfc-rotate 200s linear infinite; /* duration overridden inline */
+}
+.rfc-orbit-sat {
+  animation: rfc-rotate 200s linear infinite;
+}
+.rfc-gyro {
+  animation: rfc-gyro-sweep 38s ease-in-out infinite;
+}
+.rfc-ring {
+  animation: rfc-rotate 12s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+.rfc-nucleus {
+  transform-origin: 500px 500px;
+  animation: rfc-nucleus-drift 14s cubic-bezier(0.42, 0, 0.58, 1) infinite;
+}
+.rfc-shutter {
+  animation: rfc-shutter-travel 6s ease-in-out infinite;
+}
+.rfc-packet {
+  animation: rfc-energy-packet 2s linear infinite;
+}
+.rfc-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: rfc-node-pulse 4s ease-in-out infinite;
 }

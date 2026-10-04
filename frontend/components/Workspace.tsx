@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ReactorBackground } from "@/components/ambient/ReactorBackground";
 import { AnswerEditor } from "@/components/answer/AnswerEditor";
 import { ResultsView } from "@/components/claims/ResultsView";
 import { Header } from "@/components/layout/Header";
@@ -93,7 +94,9 @@ export function Workspace() {
   const hasResult = phase === "complete" && verification.state.result !== null;
 
   return (
-    <div className="min-h-screen">
+    <div className="relative min-h-screen">
+      {/* Ambient reactor backdrop — decorative, behind all panels */}
+      <ReactorBackground />
       <Header
         status={status}
         version={version}
@@ -104,7 +107,7 @@ export function Workspace() {
         onCheckConnection={() => void check()}
       />
 
-      <main className="mx-auto max-w-7xl px-4 py-4 sm:px-6">
+      <main className="relative z-10 mx-auto max-w-7xl px-4 py-4 sm:px-6">
         {phase === "idle" && !hasResult && (
           <div className="mb-4 border-b border-line pb-3">
             <h1 className="text-base font-semibold tracking-tight">
