@@ -7,6 +7,12 @@
  * panel, and freezes under the global prefers-reduced-motion rule in
  * globals.css. Geometry comes from seeded PRNGs at module scope so SSR and
  * client emit identical markup (no hydration drift).
+ *
+ * Intensity contract: the reactor is ambient, never competing with the
+ * workspace. Secondary traces use the darkest palette entries; saturated
+ * amber is reserved for a handful of energy elements (nucleus, packet,
+ * shutters). The container opacity (~0.72 in dark) applies the global
+ * 25%-dimmer pass on top of the per-element values below.
  */
 
 const AMBER = "#FFB400";
@@ -82,9 +88,9 @@ const BG_FIELD: BgItem[] = (() => {
         rot: rnd() * 180,
         dur,
         rev,
-        color: rnd() > 0.45 ? DEPTH : BURNT,
+        color: rnd() > 0.35 ? DEPTH : BURNT,
         width: 0.5 + rnd() * 0.8,
-        opacity: 0.16 + rnd() * 0.14,
+        opacity: 0.12 + rnd() * 0.1,
       });
     } else if (roll < 0.75) {
       const r = 120 + rnd() * 360;
@@ -98,9 +104,9 @@ const BG_FIELD: BgItem[] = (() => {
         rot: rnd() * 360,
         dur,
         rev,
-        color: rnd() > 0.4 ? DEPTH : BURNT,
+        color: rnd() > 0.3 ? DEPTH : BURNT,
         width: 0.6 + rnd() * 0.8,
-        opacity: 0.2 + rnd() * 0.15,
+        opacity: 0.15 + rnd() * 0.11,
       });
     } else {
       items.push({
@@ -110,9 +116,9 @@ const BG_FIELD: BgItem[] = (() => {
         rot: rnd() * 360,
         dur,
         rev,
-        color: rnd() > 0.7 ? BURNT : DEPTH,
+        color: rnd() > 0.6 ? BURNT : DEPTH,
         width: 0.5,
-        opacity: 0.2 + rnd() * 0.1,
+        opacity: 0.15 + rnd() * 0.08,
       });
     }
   }
@@ -140,8 +146,10 @@ const SPOKES = (() => {
       x2: 500 + len * Math.cos(rad(angle)),
       y2: 500 + len * Math.sin(rad(angle)),
       width: widths[Math.floor(rnd() * widths.length)],
-      color: roll < 0.2 ? AMBER : roll < 0.5 ? ORANGE : BURNT,
-      opacity: 0.2 + rnd() * 0.45,
+      // Amber is an energy accent — only a few spokes carry it; the rest
+      // fall back to orange/burnt so the field reads as ambient structure.
+      color: roll < 0.08 ? AMBER : roll < 0.3 ? ORANGE : BURNT,
+      opacity: 0.15 + rnd() * 0.32,
     });
     angle = (angle + 8 + rnd() * 14) % 360; // 8°–22° gaps, no robotic symmetry
   }
@@ -177,7 +185,8 @@ const SATELLITES: Satellite[] = (() => {
       kind: kinds[Math.floor(rnd() * kinds.length)],
       orbiting: i < 28,
       pulsing: i % 8 === 3, // six pulsing nodes spread across both groups
-      color: colorRoll < 0.3 ? AMBER : colorRoll < 0.6 ? ORANGE : BURNT,
+      // Saturated amber stays rare — most satellites are dimmer orange/burnt.
+      color: colorRoll < 0.12 ? AMBER : colorRoll < 0.4 ? ORANGE : BURNT,
     });
   }
   return nodes;
@@ -264,7 +273,7 @@ export function ReactorBackground() {
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed inset-0 z-0 overflow-hidden opacity-[0.14] transition-opacity duration-500 dark:opacity-100"
+      className="pointer-events-none fixed inset-0 z-0 overflow-hidden opacity-[0.14] transition-opacity duration-500 dark:opacity-[0.72]"
     >
       <svg
         className="h-full w-full"
@@ -380,7 +389,7 @@ export function ReactorBackground() {
             stroke={ORANGE}
             strokeWidth={2.5}
             strokeDasharray="400 600"
-            opacity={0.8}
+            opacity={0.65}
           />
           <ellipse
             cx={500}
@@ -390,7 +399,7 @@ export function ReactorBackground() {
             fill="none"
             stroke={BURNT}
             strokeWidth={0.8}
-            opacity={0.6}
+            opacity={0.5}
           />
           <ellipse
             className="rfc-packet"
@@ -402,10 +411,10 @@ export function ReactorBackground() {
             stroke={AMBER}
             strokeWidth={0.6}
             strokeDasharray="60 340"
-            opacity={0.9}
+            opacity={0.85}
           />
           {/* technical tick blocks at the horizontal extremes */}
-          <g fill={AMBER} opacity={0.8}>
+          <g fill={AMBER} opacity={0.65}>
             <rect x={942} y={490} width={8} height={20} />
             <rect x={50} y={490} width={8} height={20} />
           </g>
@@ -421,7 +430,7 @@ export function ReactorBackground() {
             stroke={AMBER}
             strokeWidth={2}
             strokeDasharray="80 40"
-            opacity={0.75}
+            opacity={0.6}
           />
           {SHUTTERS.map((s, i) => {
             const x = 500 + 130 * Math.cos(rad(s.deg));
@@ -451,7 +460,7 @@ export function ReactorBackground() {
             fill="none"
             stroke={ORANGE}
             strokeWidth={0.5}
-            opacity={0.5}
+            opacity={0.4}
           />
           <circle cx={500} cy={500} r={4.5} fill={AMBER} filter="url(#rfc-glow-core)" />
         </g>
@@ -465,7 +474,7 @@ export function ReactorBackground() {
               y={l.y}
               fontSize={l.size}
               fill={l.fill}
-              opacity={l.size >= 11 ? 0.55 : 0.45}
+              opacity={l.size >= 11 ? 0.42 : 0.34}
               fontWeight={l.size >= 11 ? 500 : 300}
             >
               {l.text}

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from .documents import MAX_FILE_SIZE_BYTES, DocumentExtractionError, extract_text
+from .model_registry import DEFAULT_MODEL_ID, catalog_for_client, resolve_model
 from .models import Span
 from .spans import find_evidence_span_in_doc
 
@@ -95,6 +96,9 @@ class CheckRequest(BaseModel):
         ..., description="Source documents retrieved by the RAG system"
     )
     options: CheckOptions | None = Field(None, description="Optional pipeline overrides")
+    model: str | None = Field(
+        None, description="Requested LLM model id (must be in the server allowlist)"
+    )
 
 
 class HalloumiSource(BaseModel):
@@ -115,6 +119,10 @@ class HalloumiRequest(BaseModel):
     )
     max_context_segments: int = Field(0, description="Max context segments (unused, for compat)")
     batch_size: int | None = Field(None, description="Claims per LLM call (default: 20)")
+    model: str | None = Field(
+        None,
+        description="Requested LLM model id (validated against the server allowlist)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -145,82 +153,91 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Lazy LLM initialization
-    _llm = None
-    _checker = None
+    # Lazy per-model LLM/checker initialization. One checker instance is
+    # built (and cached) per resolved model id, so selecting a different
+    # model never mutates a checker that a running verification is using.
+    _checkers: dict = {}
 
-    def _get_checker():
-        nonlocal _llm, _checker
-        if _checker is None:
-            from .checker import RAGFactsChecker
-            from .llm import AsyncAPILLM
+    def _build_checker(model: str):
+        """Build an LLM client + checker bound to one allowlisted model."""
+        from .checker import RAGFactsChecker
+        from .llm import AsyncAPILLM
 
-            env = _load_env()
-            api_base = env.get("LLM_API_BASE", "http://localhost:4002/v1")
-            api_key = env.get("LLM_API_KEY")
-            model = env.get("LLM_MODEL", "gemma")
-            temperature = float(env.get("LLM_TEMPERATURE", "0.1"))
-            max_tokens = int(env.get("LLM_MAX_TOKENS", "512"))
-            timeout = float(env.get("LLM_TIMEOUT", "120"))
-            try:
-                extra_body = json.loads(env.get("LLM_EXTRA_BODY", "{}"))
-            except json.JSONDecodeError:
-                log.warning("LLM_EXTRA_BODY is not valid JSON, ignoring")
-                extra_body = {}
+        env = _load_env()
+        api_base = env.get("LLM_API_BASE", "http://localhost:4002/v1")
+        api_key = env.get("LLM_API_KEY")
+        temperature = float(env.get("LLM_TEMPERATURE", "0.1"))
+        max_tokens = int(env.get("LLM_MAX_TOKENS", "512"))
+        timeout = float(env.get("LLM_TIMEOUT", "120"))
+        try:
+            extra_body = json.loads(env.get("LLM_EXTRA_BODY", "{}"))
+        except json.JSONDecodeError:
+            log.warning("LLM_EXTRA_BODY is not valid JSON, ignoring")
+            extra_body = {}
 
-            api_url = api_base.rstrip("/") + "/chat/completions"
-            _llm = AsyncAPILLM(
-                api_url=api_url,
-                model_name=model,
-                api_key=api_key,
-                temperature=temperature,
-                chat_mode=True,
-                max_new_tokens=max_tokens,
-                timeout=timeout,
-                extra_body=extra_body,
+        api_url = api_base.rstrip("/") + "/chat/completions"
+        llm = AsyncAPILLM(
+            api_url=api_url,
+            model_name=model,
+            api_key=api_key,
+            temperature=temperature,
+            chat_mode=True,
+            max_new_tokens=max_tokens,
+            timeout=timeout,
+            extra_body=extra_body,
+        )
+
+        # Build instructor-wrapped client for structured output
+        instructor_client = None
+        try:
+            import instructor
+            from openai import AsyncOpenAI
+
+            base_url = api_base.rstrip("/")
+            openai_client = AsyncOpenAI(
+                base_url=base_url,
+                api_key=api_key or "not-needed",
+            )
+            if extra_body:
+                # This openai SDK version has no client-level extra_body,
+                # so inject it into every chat.completions.create call.
+                _original_create = openai_client.chat.completions.create
+
+                async def _create_with_extra_body(*args, **kwargs):
+                    extra = dict(kwargs.get("extra_body") or {})
+                    extra.update(extra_body)
+                    kwargs["extra_body"] = extra
+                    return await _original_create(*args, **kwargs)
+
+                openai_client.chat.completions.create = _create_with_extra_body
+            instructor_client = instructor.from_openai(
+                openai_client, mode=instructor.Mode.MD_JSON
+            )
+        except ImportError:
+            log.warning(
+                "instructor/openai not available, falling back to raw LLM calls. "
+                "Install with: pip install instructor openai"
             )
 
-            # Build instructor-wrapped client for structured output
-            try:
-                import instructor
-                from openai import AsyncOpenAI
+        return RAGFactsChecker(
+            llm,
+            instructor_client=instructor_client,
+            model=model,
+            temperature=temperature,
+            max_new_tokens=max_tokens,
+            max_extraction_tokens=max_tokens,
+        )
 
-                base_url = api_base.rstrip("/")
-                openai_client = AsyncOpenAI(
-                    base_url=base_url,
-                    api_key=api_key or "not-needed",
-                )
-                if extra_body:
-                    # This openai SDK version has no client-level extra_body,
-                    # so inject it into every chat.completions.create call.
-                    _original_create = openai_client.chat.completions.create
+    def _get_checker(model_id: str | None = None):
+        """Return the cached checker for a resolved (allowlisted) model.
 
-                    async def _create_with_extra_body(*args, **kwargs):
-                        extra = dict(kwargs.get("extra_body") or {})
-                        extra.update(extra_body)
-                        kwargs["extra_body"] = extra
-                        return await _original_create(*args, **kwargs)
-
-                    openai_client.chat.completions.create = _create_with_extra_body
-                instructor_client = instructor.from_openai(
-                    openai_client, mode=instructor.Mode.MD_JSON
-                )
-            except ImportError:
-                instructor_client = None
-                log.warning(
-                    "instructor/openai not available, falling back to raw LLM calls. "
-                    "Install with: pip install instructor openai"
-                )
-
-            _checker = RAGFactsChecker(
-                _llm,
-                instructor_client=instructor_client,
-                model=model,
-                temperature=temperature,
-                max_new_tokens=max_tokens,
-                max_extraction_tokens=max_tokens,
-            )
-        return _checker
+        ``model_id`` is validated against the server-side allowlist; ids
+        outside it raise ``ValueError`` (callers map that to HTTP 422).
+        """
+        resolved = resolve_model(model_id)
+        if resolved not in _checkers:
+            _checkers[resolved] = _build_checker(resolved)
+        return _checkers[resolved]
 
     # -----------------------------------------------------------------------
     # Routes
@@ -237,8 +254,13 @@ def create_app() -> FastAPI:
         return {
             "status": "ok",
             "version": "0.2.0",
-            "model": env.get("LLM_MODEL", "gemma"),
+            "model": env.get("LLM_MODEL", DEFAULT_MODEL_ID),
         }
+
+    @app.get("/models")
+    async def list_models() -> dict:
+        """Public model catalog for the UI (metadata only, no secrets)."""
+        return {"models": catalog_for_client()}
 
     @app.post("/sources/extract")
     async def extract_source(file: UploadFile) -> dict:
@@ -287,15 +309,23 @@ def create_app() -> FastAPI:
         Request: {"answer": "...", "sources": ["doc1...", "doc2..."]}
         Response: {"answer_score": 0-10, "claims": [...], "segments": {...}}
         """
-        checker = _get_checker()
+        # Validate the requested model against the server allowlist BEFORE
+        # any verification work. Unknown ids never reach the LLM provider.
+        try:
+            resolved = resolve_model(request.model)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+        checker = _get_checker(resolved)
 
         documents, raw_texts = _normalize_halloumi_sources(request.sources)
 
         log.info(
-            "halloumi/generate: answer=%d chars, sources=%d docs (%d non-empty)",
+            "halloumi/generate: answer=%d chars, sources=%d docs (%d non-empty), model=%s",
             len(request.answer),
             len(request.sources),
             len(documents),
+            resolved,
         )
 
         try:
@@ -320,7 +350,12 @@ def create_app() -> FastAPI:
                     r.confidence,
                     r.evidence_span,
                 )
-            return _to_halloumi_format(report, raw_texts, request.answer)
+            result = _to_halloumi_format(report, raw_texts, request.answer)
+            # Additive field for the web UI: which model produced this
+            # result (reproducibility/auditability). Older consumers
+            # ignore unknown keys.
+            result["model"] = resolved
+            return result
         except Exception as e:
             log.exception("halloumi/generate error")
             raise HTTPException(status_code=500, detail=str(e)) from e
@@ -338,6 +373,11 @@ def create_app() -> FastAPI:
         - ``result``: the halloumi-format response (same as /halloumi/generate)
         - ``error``: {"detail": "..."}
         """
+        # Validate the requested model before streaming starts.
+        try:
+            resolved = resolve_model(request.model)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
 
         async def event_stream():
             queue: asyncio.Queue = asyncio.Queue()
@@ -349,7 +389,7 @@ def create_app() -> FastAPI:
 
             async def run_check():
                 try:
-                    checker = _get_checker()
+                    checker = _get_checker(resolved)
                     documents, raw_texts = _normalize_halloumi_sources(request.sources)
                     report = await checker.check(
                         answer=request.answer,
@@ -357,9 +397,10 @@ def create_app() -> FastAPI:
                         batch_size=request.batch_size,
                         progress_callback=on_progress,
                     )
-                    queue.put_nowait(
-                        ("result", _to_halloumi_format(report, raw_texts, request.answer))
-                    )
+                    result = _to_halloumi_format(report, raw_texts, request.answer)
+                    # Additive auditability field (see /halloumi/generate).
+                    result["model"] = resolved
+                    queue.put_nowait(("result", result))
                 except Exception as e:
                     log.exception("halloumi/generate/stream error")
                     queue.put_nowait(("error", {"detail": str(e)}))
@@ -392,7 +433,11 @@ def create_app() -> FastAPI:
         verifies each claim against the documents, and returns a
         detailed report with per-claim verdicts and evidence.
         """
-        checker = _get_checker()
+        try:
+            resolved = resolve_model(request.model)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        checker = _get_checker(resolved)
 
         # Build documents list for the checker
         documents = [{"doc_id": d.doc_id, "text": d.text} for d in request.documents]

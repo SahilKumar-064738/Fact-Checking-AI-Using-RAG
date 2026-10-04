@@ -48,7 +48,7 @@ describe("SourcesPanel", () => {
     // The empty-state area itself must contain no buttons
     const emptyState = screen.getByTestId("sources-empty-state");
     expect(emptyState.querySelectorAll("button")).toHaveLength(0);
-    expect(screen.getByText(/add text, a web link, or a document/i)).toBeInTheDocument();
+    expect(screen.getByText(/add text, a web link, or a file/i)).toBeInTheDocument();
   });
 
   it("header Add source button triggers onAdd", () => {

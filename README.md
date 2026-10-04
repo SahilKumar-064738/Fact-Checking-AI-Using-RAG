@@ -170,6 +170,23 @@ npm run dev     # http://localhost:3000
 
 The frontend talks to the backend directly from the browser (`GET /health`, `POST /halloumi/generate`, `POST /halloumi/generate/stream` over SSE) and falls back to the blocking endpoint automatically if streaming is unavailable. LLM credentials stay on the backend; nothing sensitive reaches the browser.
 
+#### Workspace features (implemented)
+
+- **RAG-based fact verification** — paste an answer, add sources, and the backend splits it into claims, verifies each against the evidence, and returns a 0–10 answer score with per-claim verdicts and evidence spans.
+- **Claim/evidence workflow** — inline claim highlighting, a claim inspector with per-claim verdicts, evidence quotes, and keyboard navigation (J/K or arrow keys, Esc to clear).
+- **Source management** — add sources via pasted text, web link (URL stored as metadata only; the page text must be supplied — the backend does not fetch URLs), or document upload (PDF, DOCX, TXT, MD up to 10 MB via `POST /sources/extract`).
+- **Drag & drop** — dropping a supported document anywhere on the empty sources panel opens the add-source dialog pre-filled with that file and runs the same extraction path.
+- **Clickable empty state** — the whole "No sources yet" panel is one keyboard-accessible action (Enter/Space) that opens the add-source dialog.
+- **Verify gating** — Verify Answer stays disabled (with explanatory helper text) until an answer and at least one source exist; Ctrl/Cmd+Enter verifies.
+- **Workflow indicator** — a subtle 3-step guide (Add Answer → Add Sources → Verify) that reflects real workspace state, including a spinner while verifying.
+- **54-model catalog** — served by `GET /models`, browsable in a model selector with search, filters (Free / Reasoning / Vision / Long Context), provider grouping, favorites, and recently-used sections.
+- **Per-verification model selection** — the chosen model id is sent with each verification request; the selection is locked for a running verification (the model in flight is shown in the UI).
+- **Default model** — `qwen/qwen3.8-omni-flash:free` (Qwen3.8 Omni Flash) on first use; the choice persists in localStorage.
+- **Backend model allowlist** — the UI only offers catalog models and the backend rejects non-allowlisted ids; arbitrary ids never reach the LLM provider.
+- **Connection checking** — Settings → Check connection performs a `GET /health` round-trip (never an LLM call) and shows status, version, and last-checked time.
+- **Dark-only UI** — a single warm near-black/amber theme (no light mode or theme toggle), with an ambient "reactor" backdrop that is decorative (`aria-hidden`, pointer-transparent, disabled under `prefers-reduced-motion`) and kept visually subordinate to workspace content.
+- **Responsive & accessible** — the model pill collapses to a full-width bar on small screens; dialogs use proper roles/labels, keyboard operation, and visible focus states.
+
 Production deployment — frontend on **Vercel**, backend on **GCP Compute Engine** with systemd + reverse proxy + HTTPS — is documented step-by-step in [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
 
 ---
@@ -191,9 +208,15 @@ Drop-in replacement for the Halloumi middleware used by `volto-eea-chatbot`.
         "link": "https://eur-lex.europa.eu/..."
       }
     ],
-    "batch_size": 20
+    "batch_size": 20,
+    "model": "qwen/qwen3.8-omni-flash:free"
   }
   ```
+
+- **`model` (optional):** LLM model id used for claim extraction and verification.
+  Must be on the server allowlist (`GET /models` lists the valid ids); unknown or
+  unsupported ids are rejected with HTTP 422. When omitted, the default model
+  (`qwen/qwen3.8-omni-flash:free`) is used.
 - **Response:**
   ```json
   {
@@ -222,8 +245,14 @@ Drop-in replacement for the Halloumi middleware used by `volto-eea-chatbot`.
 ### `POST /check`
 Full RAG fact-checking endpoint returning detailed analytical dimensions, hallucination flags, and per-claim verdicts.
 
+### `GET /models`
+Public model catalog for the UI — metadata only, no secrets. Every id offered here is on the backend fact-checking allowlist enforced by `resolve_model()`.
+
+### `POST /sources/extract`
+Extracts readable text from an uploaded document (PDF, DOCX, TXT, MD; max 10 MB) for use as a verification source. Scanned/image-only PDFs are rejected with a clear error — no OCR is performed.
+
 ### `GET /health`
-Returns service status and version (`{"status": "ok", "version": "0.2.0"}`).
+Returns service status and version (`{"status": "ok", "version": "0.2.0"}`). Also answers `HEAD` for uptime monitors.
 
 ---
 

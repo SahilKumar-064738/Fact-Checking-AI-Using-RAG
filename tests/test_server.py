@@ -293,3 +293,84 @@ class TestCheckEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "overall_verdict" in data
+
+
+class TestModelsEndpoint:
+    """Tests for GET /models (public catalog)."""
+
+    def test_models_endpoint_returns_catalog(self, client):
+        response = client.get("/models")
+        assert response.status_code == 200
+        data = response.json()
+        assert "models" in data
+        assert len(data["models"]) == 54
+
+    def test_models_contain_required_metadata(self, client):
+        data = client.get("/models").json()
+        for m in data["models"]:
+            assert m["id"]
+            assert m["provider"]
+            assert m["name"]
+            assert m["description"]
+            assert isinstance(m["capabilities"], list)
+            assert "free" in m
+
+    def test_default_model_is_marked(self, client):
+        data = client.get("/models").json()
+        defaults = [m for m in data["models"] if m.get("default")]
+        assert len(defaults) == 1
+        assert defaults[0]["id"] == "qwen/qwen3.8-omni-flash:free"
+
+    def test_models_never_leak_secrets(self, client):
+        body = client.get("/models").text
+        assert "sk-" not in body
+        assert "LLM_API_KEY" not in body
+
+
+class TestModelSelectionValidation:
+    """The backend must reject arbitrary client-supplied model ids."""
+
+    def test_halloumi_rejects_unknown_model_with_422(self, client):
+        response = client.post(
+            "/halloumi/generate",
+            json={
+                "answer": "Paris is the capital of France.",
+                "sources": ["Paris is the capital of France."],
+                "model": "evil/unauthorized-model",
+            },
+        )
+        assert response.status_code == 422
+        assert "not available" in response.json()["detail"]
+
+    def test_halloumi_rejects_image_gen_model(self, client):
+        response = client.post(
+            "/halloumi/generate",
+            json={
+                "answer": "Paris is the capital of France.",
+                "sources": ["Paris is the capital of France."],
+                "model": "sensenova/sensenova-u1.5-lite",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_check_rejects_unknown_model_with_422(self, client):
+        response = client.post(
+            "/check",
+            json={
+                "answer": "Paris is the capital of France.",
+                "documents": [{"doc_id": "d1", "text": "Paris is the capital of France."}],
+                "model": "evil/unauthorized-model",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_stream_rejects_unknown_model_with_422(self, client):
+        response = client.post(
+            "/halloumi/generate/stream",
+            json={
+                "answer": "Paris is the capital of France.",
+                "sources": ["Paris is the capital of France."],
+                "model": "evil/unauthorized-model",
+            },
+        )
+        assert response.status_code == 422

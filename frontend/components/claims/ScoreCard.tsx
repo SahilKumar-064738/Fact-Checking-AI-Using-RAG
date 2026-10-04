@@ -9,13 +9,17 @@ import { countVerdicts, groundingSummary, scoreLabel, VERDICT_STYLES } from "@/l
 
 interface ScoreCardProps {
   response: HalloumiResponse;
+  /** Human name of the model that produced this verification. */
+  modelLabel?: string | null;
+  /** Wall-clock duration of the verification run, if measured. */
+  durationMs?: number | null;
 }
 
 /**
  * Final score strip: prominent but analytical. Every number is derived from
  * the real response; the stacked bar is proportional to actual claim counts.
  */
-export function ScoreCard({ response }: ScoreCardProps) {
+export function ScoreCard({ response, modelLabel, durationMs }: ScoreCardProps) {
   const counts = useMemo(() => countVerdicts(response.claims), [response.claims]);
   const animated = useCountUp(response.answer_score);
   const label = scoreLabel(response.answer_score);
@@ -44,6 +48,16 @@ export function ScoreCard({ response }: ScoreCardProps) {
             className="text-[11px] font-medium uppercase tracking-wide text-ink-muted"
           >
             Verification complete
+            {(modelLabel || (durationMs != null)) && (
+              <span className="ml-1.5 font-normal normal-case tracking-normal text-ink-faint">
+                {modelLabel && (
+                  <span title={modelLabel}>· {modelLabel}</span>
+                )}
+                {durationMs != null && (
+                  <span> · {(durationMs / 1000).toFixed(1)}s</span>
+                )}
+              </span>
+            )}
           </h2>
           <p
             aria-label={`Answer score ${response.answer_score.toFixed(1)} out of 10`}

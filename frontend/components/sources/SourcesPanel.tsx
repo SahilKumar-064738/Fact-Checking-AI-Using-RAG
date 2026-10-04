@@ -1,6 +1,7 @@
 "use client";
 
 import { Eye, FileText, Globe, Plus, Trash2 } from "lucide-react";
+import { useState, type DragEvent } from "react";
 
 import type { SourceDoc } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -19,22 +20,37 @@ interface SourcesPanelProps {
   sources: SourceDoc[];
   disabled?: boolean;
   onAdd: () => void;
+  /** Called with the dropped file — the panel never parses files itself. */
+  onDropFile?: (file: File) => void;
   onRemove: (id: string) => void;
   onInspect: (id: string) => void;
 }
 
 /**
  * The source context the answer will be verified against. The header
- * button is the single primary "Add source" CTA — the empty state is
- * intentionally button-free so the action is never duplicated.
+ * button is the primary "Add source" CTA; when the list is empty the
+ * ENTIRE empty card is one big keyboard-accessible action that opens the
+ * same dialog (and accepts document drops).
  */
 export function SourcesPanel({
   sources,
   disabled,
   onAdd,
+  onDropFile,
   onRemove,
   onInspect,
 }: SourcesPanelProps) {
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (disabled) return;
+    const file = e.dataTransfer.files?.[0];
+    if (file && onDropFile) onDropFile(file);
+    else onAdd();
+  };
+
   return (
     <section
       aria-labelledby="sources-heading"
@@ -70,13 +86,39 @@ export function SourcesPanel({
         {sources.length === 0 ? (
           <div
             data-testid="sources-empty-state"
-            className="rounded-md border border-dashed border-line-strong px-5 py-7 text-center"
+            role="button"
+            tabIndex={disabled ? -1 : 0}
+            aria-label="No sources yet — click to add a source, or drop a document here"
+            onClick={() => !disabled && onAdd()}
+            onKeyDown={(e) => {
+              if (disabled) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onAdd();
+              }
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!disabled) setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            className={cn(
+              "rounded-md border border-dashed px-5 py-7 text-center transition-colors",
+              disabled
+                ? "border-line cursor-not-allowed opacity-60"
+                : "cursor-pointer border-line-strong hover:border-accent/60 hover:bg-surface-sunken/40",
+              dragOver && "border-accent bg-accent-soft/50",
+            )}
           >
             <FileText aria-hidden className="mx-auto h-5 w-5 text-ink-faint" />
-            <p className="mt-2 text-sm font-medium">No sources yet</p>
-            <p className="mx-auto mt-1 max-w-[26ch] text-xs leading-5 text-ink-muted">
-              Add text, a web link, or a document containing the evidence used
-              to generate this answer.
+            <p className="mt-2 text-sm font-medium">
+              {dragOver ? "Drop to add source" : "No sources yet"}
+            </p>
+            <p className="mx-auto mt-1 max-w-[30ch] text-xs leading-5 text-ink-muted">
+              {dragOver
+                ? "Release to open the add-source dialog with this document."
+                : "Drop a document here, or click anywhere in this box to add text, a web link, or a file."}
             </p>
           </div>
         ) : (

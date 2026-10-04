@@ -37,11 +37,19 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 interface AddSourceDialogProps {
   open: boolean;
+  /** File dropped onto the workspace's empty-sources card, if any —
+   *  the dialog opens straight into the upload tab and processes it. */
+  initialFile?: File | null;
   onClose: () => void;
   onAdd: (source: SourceDoc) => void;
 }
 
-export function AddSourceDialog({ open, onClose, onAdd }: AddSourceDialogProps) {
+export function AddSourceDialog({
+  open,
+  initialFile,
+  onClose,
+  onAdd,
+}: AddSourceDialogProps) {
   const [tab, setTab] = useState<Tab>("text");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
@@ -58,6 +66,7 @@ export function AddSourceDialog({ open, onClose, onAdd }: AddSourceDialogProps) 
   const firstFieldRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileTitleRef = useRef<HTMLInputElement>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const reset = useCallback(() => {
@@ -72,13 +81,6 @@ export function AddSourceDialog({ open, onClose, onAdd }: AddSourceDialogProps) 
     setShowPreview(false);
     setDragOver(false);
   }, []);
-
-  useEffect(() => {
-    if (open) {
-      reset();
-      requestAnimationFrame(() => firstFieldRef.current?.focus());
-    }
-  }, [open, reset]);
 
   useEffect(() => {
     if (!open) return;
@@ -142,13 +144,30 @@ export function AddSourceDialog({ open, onClose, onAdd }: AddSourceDialogProps) 
       const result = await extractSourceDocument(candidate);
       setExtractedText(result.text);
       setFileStatus("done");
-      if (!title.trim()) setTitle(name);
+      // Default the title to the file name without clobbering user input.
+      setTitle((prev) => (prev.trim() ? prev : name));
     } catch (e) {
       setFileStatus("error");
       setExtractedText("");
       setError(e instanceof ApiError ? e.message : "The document could not be processed.");
     }
-  }, [title]);
+  }, []);
+
+  // Open/reset lifecycle: runs after handleFile is defined so a dropped
+  // document can be processed immediately on open.
+  useEffect(() => {
+    if (!open) return;
+    reset();
+    if (initialFile) {
+      // A document was dropped onto the workspace: open straight into the
+      // upload tab and run the existing extraction path on it.
+      setTab("file");
+      void handleFile(initialFile);
+      requestAnimationFrame(() => fileTitleRef.current?.focus());
+    } else {
+      requestAnimationFrame(() => firstFieldRef.current?.focus());
+    }
+  }, [open, reset, initialFile, handleFile]);
 
   const onFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -554,6 +573,7 @@ export function AddSourceDialog({ open, onClose, onAdd }: AddSourceDialogProps) 
                   </label>
                   <input
                     id="source-title-file"
+                    ref={fileTitleRef}
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     placeholder="Defaults to the file name"

@@ -13,6 +13,10 @@ interface ResultsViewProps {
   answer: string;
   response: HalloumiResponse;
   sources: SourceDoc[];
+  /** Human-readable name of the model that ran this verification. */
+  modelLabel?: string | null;
+  /** Wall-clock duration of the verification, if measured. */
+  durationMs?: number | null;
   onInspectSource?: (sourceId: string) => void;
 }
 
@@ -25,6 +29,8 @@ export function ResultsView({
   answer,
   response,
   sources,
+  modelLabel,
+  durationMs,
   onInspectSource,
 }: ResultsViewProps) {
   const [selected, setSelected] = useState<HalloumiClaim | null>(null);
@@ -84,7 +90,7 @@ export function ResultsView({
 
   return (
     <div className="space-y-3">
-      <ScoreCard response={response} />
+      <ScoreCard response={response} modelLabel={modelLabel} durationMs={durationMs} />
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-3">

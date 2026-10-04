@@ -13,7 +13,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    /* Dark-only UI: the "dark" class is static — never toggled at runtime,
+       so there is no hydration drift. */
+    <html lang="en" className="dark">
       <head>
         {/* JetBrains Mono for the reactor backdrop's technical annotations */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />

@@ -2,22 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Dark-only: the reactor palette is the only theme. Warm near-blacks
+   tinted toward the amber hue, amber accent (#FFB400) for actions and
+   state. There is no light theme — do not reintroduce one. */
 :root {
-  --surface: 250 250 251;
-  --surface-raised: 255 255 255;
-  --surface-sunken: 244 244 246;
-  --ink: 24 24 27;
-  --ink-muted: 82 82 91;
-  --ink-faint: 140 140 150;
-  --line: 228 228 231;
-  --line-strong: 212 212 216;
-  --accent: 37 99 235;
-  --accent-soft: 239 246 255;
-}
-
-/* Dark mode is the reactor palette: warm near-blacks tinted toward the
-   amber hue, amber accent (#FFB400) for actions and state. */
-.dark {
   --surface: 10 7 5;
   --surface-raised: 21 15 10;
   --surface-sunken: 6 4 3;
@@ -28,6 +16,7 @@
   --line-strong: 64 47 32;
   --accent: 255 180 0;
   --accent-soft: 61 41 8;
+  color-scheme: dark;
 }
 
 @layer base {
@@ -103,15 +92,16 @@
   }
 }
 
-/* Technical shutters — brightness pulse 0.3 → 1.0 over 6s */
+/* Technical shutters — brightness pulse 0.3 → 0.85 over 6s (kept subtle:
+   they read as ambient blinking, not strobing) */
 @keyframes rfc-shutter-travel {
   0%,
   100% {
-    opacity: 0.3;
+    opacity: 0.25;
   }
   50% {
-    opacity: 1;
-    filter: brightness(1.8);
+    opacity: 0.85;
+    filter: brightness(1.5);
   }
 }
 

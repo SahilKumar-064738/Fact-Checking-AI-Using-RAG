@@ -50,6 +50,8 @@ export interface HalloumiResponse {
   claims: HalloumiClaim[];
   /** Map of segment id -> evidence span in the joined sources string. */
   segments: Record<string, HalloumiSegment>;
+  /** Which model produced this result (additive; older backends omit it). */
+  model?: string;
 }
 
 /** GET /health response. */
@@ -97,6 +99,11 @@ export interface HalloumiRequest {
   sources: (string | HalloumiSourceInput)[];
   max_context_segments?: number;
   batch_size?: number | null;
+  /**
+   * Requested LLM model id. The backend validates this against a
+   * server-side allowlist; arbitrary ids are rejected with 422.
+   */
+  model?: string | null;
 }
 
 /**

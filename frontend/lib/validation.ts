@@ -36,6 +36,8 @@ export const HalloumiResponseSchema = z.object({
   answer_score: z.number(),
   claims: z.array(ClaimSchema),
   segments: z.record(z.string(), SegmentSchema),
+  /** Additive auditability field (older backends may omit it). */
+  model: z.string().optional(),
 });
 
 /** A stage event from the SSE stream. */

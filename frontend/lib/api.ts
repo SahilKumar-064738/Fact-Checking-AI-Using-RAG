@@ -6,6 +6,7 @@
  * The LLM API key stays on the backend; nothing sensitive reaches the browser.
  */
 
+import type { ModelInfo } from "./modelCatalog";
 import type {
   ExtractSourceResponse,
   HalloumiRequest,
@@ -48,6 +49,38 @@ export async function getHealth(timeoutMs = 5000): Promise<HealthResponse> {
   }
   const json = await res.json();
   return parseHealthResponse(json);
+}
+
+/**
+ * GET /models — public model catalog for the model selector.
+ *
+ * Metadata only; the backend never exposes credentials here. The returned
+ * list is the single source of truth for the UI — nothing is duplicated
+ * client-side.
+ */
+export async function getModelCatalog(timeoutMs = 8000): Promise<ModelInfo[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBaseUrl()}/models`, {
+      method: "GET",
+      signal: timeoutSignal(timeoutMs),
+    });
+  } catch {
+    throw new ApiError("RAG Facts Check couldn't reach the verification backend.");
+  }
+  if (!res.ok) {
+    throw new ApiError(`The model catalog could not be loaded (status ${res.status}).`, res.status);
+  }
+  let json: { models?: unknown };
+  try {
+    json = (await res.json()) as { models?: unknown };
+  } catch {
+    throw new ApiError("The model catalog response was malformed.");
+  }
+  if (!Array.isArray(json.models)) {
+    throw new ApiError("The model catalog response was malformed.");
+  }
+  return json.models as ModelInfo[];
 }
 
 /**
